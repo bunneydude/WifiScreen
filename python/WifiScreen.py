@@ -1,5 +1,6 @@
 import socket
 import imghdr
+import struct
 
 #command codes
 BACKGROUND = 20 
@@ -20,6 +21,7 @@ NEWIMAGE = 34
 GETIMAGE = 35
 ACK = 36
 NACK = 37
+BUFFERSIZE = 38
 IMGTYPES = {'png':0, 'jpeg':1, 'bmp':2}
 
 
@@ -53,21 +55,22 @@ class WifiScreen():
       self.conn.close()
       self.sock.close()
 
-   def send(self, cmd, payload=[], text=""):
-      toSend = [] # format is <cmd>, <length MSB>, <length LSB>, <payload>
-      toSend.append(cmd)
-      toSend.append( ((len(payload) + len(text))&0xFF00)>>8 )
-      toSend.append( (len(payload) + len(text)) & 0xFF )
+   def send(self, cmd, payload=[], text="", name=0):
+      toSend = '' # format is <cmd - 1 byte>, <payload length - 2 bytes>, <text length - 2 bytes> <payload>, <text>
+      #each entry in the payload is 2 bytes
+      #each entry in text is 1 bytes
+      toSend += chr(cmd)
+      toSend += struct.pack('>h', len(payload) )
+      toSend += struct.pack('>h', len(text) )
+      toSend += struct.pack('>h', name)
 
       if( ( (type(payload) is list) or (type(payload) is str) ) and (type(text) is str) ):
          if(type(payload) is list):
-            payload = ''.join(map(chr,payload)) # now a string
-
-         toSend = ''.join(map(chr,toSend))
+            payload = struct.pack('>'+str(len(payload))+'h', *payload)
 
          toSend += payload
-         self.conn.send(toSend + text)
-#         print("About to send " + str(map(ord,toSend)) + text.encode() )
+         toSend += text
+         self.conn.send(toSend)
       else:
          print("Bad types. Payload was: " + str(type(payload)) +", Text was: " + str(type(text)) )
 
@@ -90,8 +93,8 @@ class WifiScreen():
    def noFill(self):
       self.send(NOFILL)
 
-   def text(self, text, xPos, yPos):
-      self.send(TEXT, [(xPos&0xFF00)>>8, xPos&0xFF, (yPos&0xFF00)>>8, yPos&0xFF], text)
+   def text(self, text, xPos, yPos, objectName=0):
+      self.send(TEXT, [xPos, yPos], text, name = objectName)
 
    def setTextSize(self, size):
       if(size in range(1,6)): # valid 'size' values are [1,5]
@@ -99,14 +102,14 @@ class WifiScreen():
       else:
          raise NameError('Text size must be in range [1,5]. It was ' + str(size) )
 
-   def point(self, xPos, yPos):
-      self.send(POINT, [(xPos&0xFF00)>>8, xPos&0xFF, (yPos&0xFF00)>>8, yPos&0xFF])
+   def point(self, xPos, yPos, objectName=0):
+      self.send(POINT, [xPos, yPos], name = objectName)
 
-   def line(self, xStart, yStart, xEnd, yEnd):
-      self.send(LINE, [(xStart&0xFF00)>>8, xStart&0xFF, (yStart&0xFF00)>>8, yStart&0xFF, (xEnd&0xFF00)>>8, xEnd&0xFF, (yEnd&0xFF00)>>8, yEnd&0xFF])
+   def line(self, xStart, yStart, xEnd, yEnd, objectName=0):
+      self.send(LINE, [xStart, yStart, xEnd, yEnd], name = objectName)
 
-   def rect(self, xPos, yPos, width, height):
-      self.send(RECT, [(xPos&0xFF00)>>8, xPos&0xFF, (yPos&0xFF00)>>8, yPos&0xFF, (width&0xFF00)>>8, width&0xFF, (height&0xFF00)>>8, height&0xFF])
+   def rect(self, xPos, yPos, width, height, objectName=0):
+      self.send(RECT, [xPos, yPos, width, height], name = objectName)      
 
    def width(self):
       self.send(WIDTH)
@@ -118,15 +121,20 @@ class WifiScreen():
       temp = map(ord,self.receive())
       return ((temp[1]<<24) + (temp[2]<<16) + (temp[3]<<8) + (temp[4]))
 
-   def circle(self, xPos, yPos, radius):
-      self.send(CIRCLE, [(xPos&0xFF00)>>8, xPos&0xFF, (yPos&0xFF00)>>8, yPos&0xFF, (radius&0xFF00)>>8, radius&0xFF])
+   def bufferSize(self):
+      self.send(BUFFERSIZE)
+      temp = map(ord,self.receive())
+      return ((temp[1]<<24) + (temp[2]<<16) + (temp[3]<<8) + (temp[4]))
 
-   def image(self, imgName, xPos, yPos, overwrite=0):
+   def circle(self, xPos, yPos, radius, objectName=0):
+      self.send(CIRCLE, [xPos, yPos, radius], name = objectName)
+
+   def image(self, imgName, xPos, yPos, objectName=0, overwrite=0,):
       if( (imgName not in self.validImages) or (overwrite == 1) ): # if new image or want to overwrite, send image file
          self.sendImage(imgName, overwrite)
 
-      #either way, specify location for the image to be drawn
-      self.send(IMAGE, [(xPos&0xFF00)>>8, xPos&0xFF, (yPos&0xFF00)>>8, yPos&0xFF, self.validImages[imgName] ])
+      #either way, specify location and index for the image to be drawn
+      self.send(IMAGE, [xPos, yPos, self.validImages[imgName] ], name = objectName)
 
    def sendImage(self, imgName, overwrite=0):
       # you shouldn't need to call 'sendImage' directly. Just use 'image'
@@ -147,8 +155,7 @@ class WifiScreen():
 
          line = f.read(2**13-1)
          while(len(line) != 0):
-            self.send(GETIMAGE, line) #sent bytes of image in (2^13)-1 byte chunks
-            #print("Sent " + str(len(line)) + " bytes")
+            self.send(GETIMAGE, payload=[], text=line) #sent bytes of image in (2^13)-1 byte chunks
             line = f.read(2**13-1)
 
          self.send(GETIMAGE) #marks completion of file transfer

@@ -2,6 +2,10 @@ import WifiScreen
 import sys
 import random
 
+if sys.version_info[:3] != (2,7,3):
+   print("Needs Python version 2.7.3 for Galileo compatibility.")
+   sys.exit()
+
 screen = WifiScreen.WifiScreen(sys.argv[1], int(sys.argv[2]))
 
 width = screen.width()
